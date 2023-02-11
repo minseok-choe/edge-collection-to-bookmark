@@ -1,0 +1,7 @@
+/*
+!*.cpp
+!source/
+source/*
+!source/*.cpp
+source/.*
+!.gitignore
