@@ -12,9 +12,10 @@
 
 #include<Processenv.h>
 
+#define EXPCOL_VERSION "2023.02.12"
+
 using typename std::string, std::unordered_map, std::pair, std::vector, std::map, std::wstring, std::optional;
 using std::make_pair;
-
 
 namespace favicon
 {
@@ -447,8 +448,8 @@ int convert(const char * filepath, const char * outputpath)
     {
         rc = sqlite3_exec(db, "SELECT * FROM favicons", callback::count_rows, &favicon_numbers, &err_msg);
         if(rc != SQLITE_OK){
-            fprintf(stderr, "Some error occur: %s\n", 
-            sqlite3_errmsg(db));
+            //fprintf(stderr, "Some error occur: %s\n", 
+            //sqlite3_errmsg(db));
             sqlite3_close(db);
             db = nullptr;
 
@@ -459,8 +460,8 @@ int convert(const char * filepath, const char * outputpath)
         rc = sqlite3_exec(db, "SELECT * FROM favicons", callback::download_icon, (index = 0, &index), &err_msg);
         std::cout << color::reset << '\n';
         if(rc != SQLITE_OK){
-        fprintf(stderr, "Some error occur: %s\n", 
-        sqlite3_errmsg(db));
+        //fprintf(stderr, "Some error occur: %s\n", 
+        //sqlite3_errmsg(db));
         sqlite3_close(db);
         db = nullptr;
 
@@ -470,8 +471,8 @@ int convert(const char * filepath, const char * outputpath)
 
     rc = sqlite3_exec(db, "SELECT * FROM collections_items_relationship", callback::mark_to_folder_initialize, (index = 0, &index), &err_msg);
     if(rc != SQLITE_OK){
-        fprintf(stderr, "Some error occur: %s\n", 
-        sqlite3_errmsg(db));
+        //fprintf(stderr, "Some error occur: %s\n", 
+        //sqlite3_errmsg(db));
         sqlite3_close(db);
         db = nullptr;
 
@@ -481,8 +482,8 @@ int convert(const char * filepath, const char * outputpath)
     rc = sqlite3_exec(db, "SELECT * FROM collections", callback::make_collection_vector, (index = 0, &index), &err_msg);
 
     if(rc != SQLITE_OK){
-        fprintf(stderr, "Some error occur: %s\n", 
-        sqlite3_errmsg(db));
+        //fprintf(stderr, "Some error occur: %s\n", 
+        //sqlite3_errmsg(db));
         sqlite3_close(db);
         db = nullptr;
 
@@ -492,8 +493,8 @@ int convert(const char * filepath, const char * outputpath)
     rc = sqlite3_exec(db, "SELECT * FROM items", callback::read_items, (index = 0, &index), &err_msg);
 
     if(rc != SQLITE_OK){
-        fprintf(stderr, "Some error occur: %s\n", 
-        sqlite3_errmsg(db));
+        //fprintf(stderr, "Some error occur: %s\n", 
+        //sqlite3_errmsg(db));
         sqlite3_close(db);
         db = nullptr;
 
@@ -534,6 +535,9 @@ int main(int argc, char* argv[])
     argmap["-b"] = 'b';
     argmap["--boost"] = 'b';
     
+    argmap["-v"] = 'v';
+    argmap["--version"] = 'v';
+    
 
     for(int index = 1; index < argc; ++index)
     {
@@ -543,8 +547,6 @@ int main(int argc, char* argv[])
         switch (argmap[argv[index]])
         {
             case 'h':
-
-
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
@@ -557,21 +559,21 @@ int main(int argc, char* argv[])
             std::cout << std::left
             << "[-i | --input] filepath"
             << color::reset
-            << "Set edge collection folder manually\n";
+            << "Set edge collection db path manually\n";
 
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
             << "[-o | --output] filepath"
             << color::reset
-            << "Set location of made HTML file\n";
+            << "Set location and name of exported HTML file\n";
 
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
             << "[-p | --profile] profile_folder_name"
             << color::reset
-            << "Set input path using profile name. A simpler version of -i.\n";
+            << "Set input path using profile name. -p \"default\" is same as default behaviour.\n";
 
             std::cout << color::yellow;
             std::cout.width(printalin);
@@ -586,6 +588,13 @@ int main(int argc, char* argv[])
             << "[-b | --boost]"
             << color::reset
             << "Download favicon faster by assuming wesites cannot have different icons per-page. This implies -f on.\n";
+
+            std::cout << color::yellow;
+            std::cout.width(printalin);
+            std::cout << std::left
+            << "[-v | --version]"
+            << color::reset
+            << "Show version of program\n";
 
             //<< "-s --sort [default/name/day_created/recently_used]\n"
             ;
@@ -647,6 +656,11 @@ int main(int argc, char* argv[])
             }
         break;
         
+        case 'v':
+            std::cout << "Version " << EXPCOL_VERSION << '\n';
+            return 0;
+            break;
+
         default:
             {
                 std::cout << "Error occured while parsing arguments: "
@@ -682,11 +696,11 @@ int main(int argc, char* argv[])
         break;
 
     case 1:
-        std::cout << "Error occured while opening collection database file.\n";
+        std::cout << "Error occured at database file.\n";
         break;
 
     case 2:
-        std::cout << "Error occured while making output file. Is this path valid?: "
+        std::cout << "Error occured making output file. Is this path valid or accessible with current permission?: "
         << OUTPUT_PATH
         << "\n";
 
