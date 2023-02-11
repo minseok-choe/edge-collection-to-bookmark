@@ -12,7 +12,7 @@
 
 #include<Processenv.h>
 
-#define EXPCOL_VERSION "2023.02.12"
+#define EXPCOL_VERSION "1.0.0"
 
 using typename std::string, std::unordered_map, std::pair, std::vector, std::map, std::wstring, std::optional;
 using std::make_pair;
