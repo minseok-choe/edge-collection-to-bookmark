@@ -1,21 +1,37 @@
-#include"sqlite/sqlite3.h"
 #include "curl/curl.h"
+#include "sqlite/sqlite3.h"
 
-#include <optional>
-#include<iostream>
-#include<vector>
-#include<string>
-#include<map>
-#include<unordered_map>
-#include<cstring>
-#include<fstream>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <map>
+#include <unordered_map>
+#include <cstring>
+#include <fstream>
 
-#include<Processenv.h>
+#include <Processenv.h>
 
-#define EXPCOL_VERSION "1.0.0"
+#define EXPCOL_VERSION "1.0.2"
 
-using typename std::string, std::unordered_map, std::pair, std::vector, std::map, std::wstring, std::optional;
+//#define DEBUG
+#ifdef DEBUG
+int debugcount = 0;
+#endif
+
+using typename std::string, std::unordered_map, std::pair, std::vector, std::map, std::wstring;
 using std::make_pair;
+
+enum class sortcriteria {
+    def,
+    name,
+    add,
+    last
+};
+
+sortcriteria folder_sortcriteria = sortcriteria::def;
+bool folder_reverse = false;
+sortcriteria bookmark_sortcriteria = sortcriteria::def;
+bool bookmark_reverse = false;
 
 namespace favicon
 {
@@ -62,7 +78,7 @@ namespace favicon
 
       virtual_file() {data = new char[vfsize];}
       ~virtual_file() {delete [] data;}
-    };
+    };    
 
     size_t write_data(void *ptr, size_t size, size_t nmemb, virtual_file *stream) {
         size_t written;
@@ -70,7 +86,7 @@ namespace favicon
         return written;
     }
 
-    std::optional<std::string> faviconurl_to_base64(const char * url)
+    string faviconurl_to_base64(const char * url)
     {
       
         CURL *curl;
@@ -108,36 +124,50 @@ namespace favicon
             if (res != CURLE_OK)
             {
                 delete fp;
-                return std::nullopt;
+                return "";
             }
 
-            optional ico = base64::encode(fp->data, fp->pointer);
+            string ico = base64::encode(fp->data, fp->pointer);
             delete fp;
             return ico;
         }
         else
         {
-          return std::nullopt;
+          return "";
         }
 
     }
 
 } // namespace favicon
 
-
 const char * PAGE_TITLE = "Bookmarks";
 const char * PAGE_H1 = "Bookmarks";
 const char * TOP_FOLDER_NAME = "From Collections";
+constexpr time_t maxtime() {
+    time_t x = 0;
+    time_t y = 1;
+
+    while(x!=y) {
+        x = x << 1;
+        x += 1;
+
+        y = y << 1;
+        y += 1;
+    }
+
+    return x;
+}
+time_t file_add = maxtime();
+time_t file_last = 0;
 
 bool download_favicon = false;
 bool download_boost = false;
 int favicon_numbers = 0;
+unordered_map<string, pair<string, string>> url_to_base64string; //extenstion, base64
 
 typedef std::string bookmark_id;
 typedef std::string collection_id;
-typedef long long int position;
-typedef time_t collection_sort_criteria;
-typedef position bookmark_sort_criteria;
+typedef time_t position;
 
 const char * INPUT_PATH = R"(%localappdata%\Microsoft\Edge\User Data\Default\Collections\collectionsSQLite)";
 const char * OUTPUT_PATH = R"(%UserProfile%\exported from edge collections.html)";
@@ -170,52 +200,145 @@ namespace parse {
     string before(string s, string token){ return s.substr(0, s.find(token));}
     string rafter(string s, string token) { return s.substr(s.rfind(token) + token.length(), s.length() - s.rfind(token) - token.length() );}
     string rbefore(string s, string token){ return s.substr(0, s.rfind(token));}
-
-    string shortening(string url)
-    {
+    string urlshortening(string url) {
         string s = after(url, ":");
         size_t index;
         for(index = 0; index < s.length(); ++index) {if(s[index]!='/') break;}
         s = s.substr(index, s.length() -index);
         s = before(s, "/");
         return s;
+    }    
+    time_t str_to_time_t(string str)
+    {
+        if (str.find(".") != str.size()) //millisecond랑 time_t섞여있음 소수점 있으면 밀리초로 가정
+        {
+            str = parse::before(str, ".");
+            if (str.length()>3) str = str.substr(0, str.length() -3);
+            else str = "0";
+        }
+
+        time_t date = 0;
+        for(const char& digit : str)
+        {
+            date *= 10;
+            date += digit - '0';
+        }
+
+        return date;
+    }
+    inline time_t str_to_time_t(const char * str) {return str_to_time_t(string(str));}
+    int str_to_int(string str)
+    {
+        int date = 0;
+        for(const char& digit : str)
+        {
+            date *= 10;
+            date += digit - '0';
+        }
+
+        return date;
     }
 };
+
 class bookmark {
     private:
     public:
+    string id;
+    int reducedid;
     string href;
     time_t add_date;
+    time_t last_modified;
     string iconurl;
     string name;
 
-    bookmark (string href_para, time_t add_date_para, const char * icon_para, string name_para)
-     : href(href_para), add_date(add_date_para), name(name_para)
-     {
-        if (icon_para != nullptr)
+    int print(std::ofstream& os)
+    {
+
+        os
+        << "            <DT><A HREF=\"" << this->href
+        << "\" ADD_DATE=\"" << this->add_date
+        << "\"";
+
+        string thisurl = this->iconurl;
+        if (download_boost) thisurl = parse::urlshortening(thisurl);
+
+        if (url_to_base64string.find(thisurl) != url_to_base64string.end() && url_to_base64string[thisurl].first != "fail")
         {
-            iconurl = string(icon_para);
+            os
+            << " ICON=\"data:image/"
+            << url_to_base64string[thisurl].first
+            << ";base64,"
+            << url_to_base64string[thisurl].second
+            << "\"";
         }
-        else
-        {
-            iconurl = "";
-        }
-     };
+
+        os
+        << ">"
+        << this->name
+        #ifdef DEBUG
+        << "   -" 
+        << ++debugcount
+        << "th"
+        #endif
+        << "</A></DT>"
+        << '\n';
+        return 0;
+    }
 };
+
 class folder {
     public:
+    string id;
+    int reducedid;
     string name;
     time_t add_date;
     time_t last_modified;
-    map<position, bookmark *> bookmarks;
+    map<pair<string, int>, bookmark *> bookmarks_sortbyname;
+    map<pair<time_t, int>, bookmark *> bookmarks_sortbytime;
+ 
+    int print(std::ofstream& os)
+    {
+        os
+        << "        <DT><H3 ADD_DATE=\""
+        << this->add_date
+        << "\" LAST_MODIFIED=\""
+        << this->last_modified
+        << "\">"
+        //<< "Col "
+        //<< " : "
+        << this->name
+        #ifdef DEBUG
+        << "   Count:"
+        << bookmarks_sortbyname.size()
+        << ' '
+        << bookmarks_sortbytime.size()
+        #endif
+        << "</H3>\n";
+
+        os << "        <DL><p>\n";
+
+        if (this->bookmarks_sortbyname.empty())
+        for (auto& [key, value]: this->bookmarks_sortbytime)
+        {value->print(os);}
+        else
+        for (auto& [key, value]: this->bookmarks_sortbyname)
+        {value->print(os);}
+
+        os << "        </DL></DT><p>\n"; ///디렉토리 닫는 DL
+
+        return 0;
+    }
 };
 
-map<collection_sort_criteria, collection_id> collectionlist;
-unordered_map<bookmark_id, pair<collection_id, position>> bookmarkid_to_collectionid;
+map<pair<string, int>, folder *> collection_sortbyname;
+map<pair<time_t, int>, folder *> collection_sortbytime;
+
+unordered_map<bookmark_id, collection_id> bookmarkid_to_collectionid;
 unordered_map<collection_id, folder *> collection_tagging;
+unordered_map<bookmark_id, bookmark *> bookmark_tagging;
+
 
 vector<string> url_favicon_candidates;
-unordered_map<string, pair<string, string>> url_to_base64string;
 
 void printProgress(const char * message, double percentage) {
     /*
@@ -227,117 +350,9 @@ void printProgress(const char * message, double percentage) {
     int val = (int) (percentage * 100);
     int lpad = (int) (percentage * PBWIDTH);
     int rpad = PBWIDTH - lpad;
-    printf("\r%20s%3d%% [%.*s%*s]", message, val, lpad, "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||", rpad, "");
+    printf("\r%24s%3d%% [%.*s%*s]", message, val, lpad, "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||", rpad, "");
     fflush(stdout);
 }
-
-namespace callback
-        {
-            
-        int make_collection_vector(void *iter, int argc, char * argv[], char * azColName[]) {
-
-            folder * reading = new folder();
-
-            time_t date = 0;
-            for(size_t index = 0; argv[1][index] != '\0' && argv[1][index] != '.'; ++index)
-            {
-                date *= 10;
-                date += argv[1][index] - '0';
-            }
-            reading->add_date = date;
-
-            date = 0;
-            for(size_t index = 0; argv[2][index] != '\0' && argv[2][index] != '.'; ++index)
-            {
-                date *= 10;
-                date += argv[2][index] - '0';
-            }
-            reading->last_modified = date;
-            reading->name = argv[3];
-
-            collection_tagging.insert( make_pair(argv[0], reading) );
-            collectionlist.insert( make_pair((collection_sort_criteria) *((int*)iter) , argv[0]) );
-            
-            *((int*)iter) += 1;
-
-            return 0;
-        }
-
-        int mark_to_folder_initialize(void *iter, int argc, char * argv[], char * azColName[])
-        {   
-            position pos = 0;
-            for(size_t index = 0; argv[2][index] != '\0'; ++index)
-            {
-                pos *= 10;
-                pos += argv[2][index] - '0';
-            }
-            bookmarkid_to_collectionid.insert(make_pair(argv[0], make_pair(argv[1], pos)));
-            return 0;
-        }
-
-        int read_items(void *iter, int argc, char * argv[], char * azColName[])
-        {   
-            if (strcmp(argv[11],"website")!=0) {return 0;}
-
-            string jsoned(argv[4]);
-            jsoned = parse::after(jsoned, "\"url\"");
-            jsoned = parse::after(jsoned, ":");
-            jsoned = parse::after(jsoned, "\"");
-            jsoned = parse::before(jsoned, "\"");
-            
-            time_t date = 0;
-            for(size_t index = 0; argv[1][index] != '\0' && argv[1][index] != '.'; ++index)
-            {
-                date *= 10;
-                date += argv[1][index] - '0';
-            }
-
-            bookmark_id id = argv[0];
-
-            bookmark * reading = new bookmark(jsoned, date, argv[6], argv[3]);
-            collection_tagging[bookmarkid_to_collectionid[id].first]->bookmarks.insert(make_pair(bookmarkid_to_collectionid[id].second, reading));
-            
-            *((int*)iter) += 1;
-
-            return 0;
-        }
-
-        int count_rows(void *iter, int argc, char * argv[], char * azColName[])
-        {   
-            *((int*)iter) += 1;
-            return 0;
-        }
-
-        int download_icon(void *iter, int argc, char * argv[], char * azColName[])
-        {   
-            string url(argv[0]);
-            string extension = parse::rafter(parse::before(url, "?"), ".");
-
-            if (download_boost){
-                string shortenurl = parse::shortening(url);
-                if (url_to_base64string.find(shortenurl) == url_to_base64string.end())
-                {
-                    optional ico = favicon::faviconurl_to_base64(url.c_str());
-                    if (ico) url_to_base64string[shortenurl] = make_pair(extension, ico.value());
-                    else url_to_base64string[shortenurl] = make_pair("fail", "");
-                }
-            }
-            else if (url_to_base64string.find(url) == url_to_base64string.end())
-            {
-                optional ico = favicon::faviconurl_to_base64(url.c_str());
-                if (ico) url_to_base64string[url] = make_pair(extension, ico.value());
-                else url_to_base64string[url] = make_pair("fail", "");
-            }
-
-            double progress = ((double) *((int*)iter)) / ((double) favicon_numbers);
-            if (progress >= 0.99) printProgress("Downloading Favicon", 1.0);
-            else printProgress("Downloading Favicon", progress);
-
-            *((int*)iter) += 1;
-
-            return 0;
-        }
-} // namespace callback
 
 int printHTML(std::ofstream& os)
 {
@@ -356,58 +371,20 @@ int printHTML(std::ofstream& os)
 
     os
     << "    <DT><H3 ADD_DATE=\""
-    << 0
-    << "\" LAST_MODIFIED=\"0\" PERSONAL_TOOLBAR_FOLDER=\"true\">"
+    << file_add
+    << "\" LAST_MODIFIED=\""
+    << file_last
+    << "\" PERSONAL_TOOLBAR_FOLDER=\"true\">"
     << TOP_FOLDER_NAME
     << "</H3></DT>\n"
     << "    <DL><p>\n"; //컬렉션감사는dl
     
-    
-    for(const auto& [key, value] : collectionlist)
-    {
-        os
-        << "        <DT><H3 ADD_DATE=\""
-        << collection_tagging[value]->add_date
-        << "\" LAST_MODIFIED=\""
-        << collection_tagging[value]->last_modified
-        << "\">"
-        //<< "Col "
-        //<< " : "
-        << collection_tagging[value]->name
-        << "</H3>\n";
-
-        os << "        <DL><p>\n";
-
-        for(const auto& [underkey, b] : collection_tagging[value]->bookmarks)
-        {
-            os
-            << "            "
-            << "<DT><A HREF=\"" << b->href
-            << "\" ADD_DATE=\"" << b->add_date
-            << "\"";
-
-            string thisurl = b->iconurl;
-            if (download_boost) thisurl = parse::shortening(thisurl);
-
-            if (url_to_base64string.find(thisurl) != url_to_base64string.end() && url_to_base64string[thisurl].first != "fail")
-            {
-                os
-                << " ICON=\""
-                << "data:image/"
-                << url_to_base64string[thisurl].first
-                << ";base64,"
-                << url_to_base64string[thisurl].second
-                << "\"";
-            }
-
-            os
-            << ">"
-            << b->name << "</A></DT>"
-            << '\n';
-        }
-
-        os << "        </DL></DT><p>\n"; ///디렉토리 닫는 DL
-    }
+    if (collection_sortbyname.empty())
+    for (auto& [key, value]: collection_sortbytime)
+    {value->print(os);}
+    else
+    for (auto& [key, value]: collection_sortbyname)
+    {value->print(os);}
 
     os
     << "    </DL><p>\n" ///컬렉션 닫는 DL
@@ -421,6 +398,131 @@ const char * expand_path(const char * path)
     ExpandEnvironmentStrings(path, pathdata, MAXSIZE-1);
     return pathdata;
 }
+
+namespace callback
+{
+    int count_rows (void * index, int arg, char * col[], char * colname[])
+    {   
+        ++favicon_numbers;
+        return 0;
+    }
+    int download_icon (void * index, int argc, char * argv[], char * colname[])
+        {   
+            string url(argv[0]);
+            string extension = parse::rafter(parse::before(url, "?"), ".");
+
+            if (download_boost){
+                string shortenurl = parse::urlshortening(url);
+                if (url_to_base64string.find(shortenurl) == url_to_base64string.end())
+                {
+                    string ico = favicon::faviconurl_to_base64(url.c_str());
+                    if (ico!="") url_to_base64string[shortenurl] = make_pair(extension, ico);
+                    else url_to_base64string[shortenurl] = make_pair("fail", "");
+                }
+            }
+            else if (url_to_base64string.find(url) == url_to_base64string.end())
+            {
+                string ico = favicon::faviconurl_to_base64(url.c_str());
+                if (ico!="") url_to_base64string[url] = make_pair(extension, ico);
+                else url_to_base64string[url] = make_pair("fail", "");
+            }
+
+            double progress = ((double) *((int*)index)) / (double) favicon_numbers;
+            if (progress >= 0.99) printProgress("Downloading Favicon", 1.0);
+            else printProgress("Downloading Favicon", progress);
+
+            *((int*)index) += 1;
+
+            return 0;
+        }
+
+
+    int make_collection_vector (void * index, int argc, char * argv[], char * colname[]) {
+
+            folder * reading = new folder();
+
+            reading->id = argv[0];
+            reading->reducedid = *( (int*)index );
+            reading->add_date = parse::str_to_time_t(argv[1]);
+            reading->last_modified = parse::str_to_time_t(argv[2]);
+            reading->name = argv[3];
+
+            file_add = std::min(file_add, reading->add_date);
+            file_last = std::min(file_last, reading->last_modified);
+
+            if (collection_tagging.find(reading->id)!=collection_tagging.end()) std::cout << "중복되는 id 존재! : col\n";
+            collection_tagging[reading->id] = reading;
+
+            switch (folder_sortcriteria)
+            {
+            case sortcriteria::name:
+                collection_sortbyname[make_pair(reading->name, reading->reducedid)] = reading;
+                break;
+            
+            default:
+                collection_sortbytime[make_pair((folder_sortcriteria == sortcriteria::last ? reading->last_modified : reading->add_date), reading->reducedid)] = reading;
+                break;
+            }
+           
+            *((int*)index) += 1;
+
+            return 0;
+
+        }
+
+        int mark_to_folder_initialize (void * index, int argc, char * argv[], char * colname[])
+        {   
+            bookmark * reading = new bookmark();
+            bookmark_tagging[string(argv[0])] = reading;
+
+            reading->id = argv[0];
+            reading->reducedid = parse::str_to_int(argv[2]);
+            
+            bookmarkid_to_collectionid[string(argv[0])] = argv[1];
+            return 0;
+        }
+
+    int read_items (void * index, int argc, char * argv[], char * colname[])
+        {   
+            if (strcmp(argv[11],"website")!=0) {return 0;}
+            else if(argv[4]==nullptr) {return 0;}
+            
+            string jsoned(argv[4]);
+            jsoned = parse::after(jsoned, "\"url\"");
+            jsoned = parse::after(jsoned, ":");
+            jsoned = parse::after(jsoned, "\"");
+            jsoned = parse::before(jsoned, "\"");
+
+            bookmark * reading = bookmark_tagging[string(argv[0])];
+
+            folder * parent = collection_tagging[bookmarkid_to_collectionid[reading->id]];
+
+            char empty[1] = {'\0'};
+
+            reading->add_date = parse::str_to_time_t(argv[1]);
+            reading->last_modified = parse::str_to_time_t(argv[2]);
+            reading->href = jsoned;
+            reading->name = (argv[3]==nullptr ? "Untitled" : argv[3]);
+            reading->iconurl = (argv[6]==nullptr ? empty : argv[6]);
+
+            switch (folder_sortcriteria)
+            {
+            case sortcriteria::name:
+                parent->bookmarks_sortbyname[make_pair(reading->name, reading->reducedid)] = reading;
+                break;
+            
+            default:
+                parent->bookmarks_sortbytime[make_pair((bookmark_sortcriteria == sortcriteria::last ? reading->last_modified : reading->add_date), reading->reducedid)] = reading;
+                break;
+            }
+
+            file_add = std::min(file_add, reading->add_date);
+            file_last = std::min(file_last, reading->last_modified);
+            
+            return 0;
+        }
+} // namespace callback
+
 
 int convert(const char * filepath, const char * outputpath)
 {
@@ -520,24 +622,39 @@ int convert(const char * filepath, const char * outputpath)
 
 int main(int argc, char* argv[])
 {
-    
+    const char * b_filter;
+    const char * f_filter;
+
     unordered_map<string, char> argmap;
-    argmap["-h"] = 'h';
-    argmap["--help"] = 'h';
+    {
+
     argmap["-f"] = 'f';
     argmap["--favicon"] = 'f';
+
+    
+    argmap["-ff"] = '2';
+    argmap["--fastfavicon"] = '2';
+
     argmap["-i"] = 'i';
     argmap["--input"] = 'i';
     argmap["-o"] = 'o';
     argmap["--output"] = 'o';
     argmap["-p"] = 'p';
     argmap["--profile"] = 'p';
-    argmap["-b"] = 'b';
-    argmap["--boost"] = 'b';
     
-    argmap["-v"] = 'v';
+    argmap["--help"] = 'h';
     argmap["--version"] = 'v';
+
+    argmap["-sf"] = 'c';
+    argmap["-sb"] = 'b';
+    }
     
+    unordered_map<string, sortcriteria> sortoption;
+    {
+    sortoption["add_date"] = sortcriteria::add;
+    sortoption["last_modified"] = sortcriteria::last;
+    sortoption["name"] = sortcriteria::name;
+    }
 
     for(int index = 1; index < argc; ++index)
     {
@@ -547,12 +664,11 @@ int main(int argc, char* argv[])
         switch (argmap[argv[index]])
         {
             case 'h':
-            std::cout << color::yellow;
-            std::cout.width(printalin);
-            std::cout << std::left
-            << "[-h | --help]"
-            << color::reset
-            << "Show this text\n";
+            {
+
+
+            std::cout << "\n"
+            << "Path\n";
 
             std::cout << color::yellow;
             std::cout.width(printalin);
@@ -575,6 +691,11 @@ int main(int argc, char* argv[])
             << color::reset
             << "Set input path using profile name. -p \"default\" is same as default behaviour.\n";
 
+
+            
+            std::cout << "\n"
+            << "Favicon\n";
+
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
@@ -585,14 +706,44 @@ int main(int argc, char* argv[])
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
-            << "[-b | --boost]"
+            << "[-ff | --fastfavicon]"
             << color::reset
             << "Download favicon faster by assuming wesites cannot have different icons per-page. This implies -f on.\n";
+
+
+
+            std::cout << "\n"
+            << "Sort Filters\n";
 
             std::cout << color::yellow;
             std::cout.width(printalin);
             std::cout << std::left
-            << "[-v | --version]"
+            << "-sf [name|add_date|last_modified]"
+            << color::reset
+            << "Set sort filter of folders\n";
+
+            std::cout << color::yellow;
+            std::cout.width(printalin);
+            std::cout << std::left
+            << "-sb [name|add_date|last_modified]"
+            << color::reset
+            << "Set sort filter of bookmarks\n";
+
+
+            std::cout << "\n"
+            << "About Informations\n";
+
+            std::cout << color::yellow;
+            std::cout.width(printalin);
+            std::cout << std::left
+            << "--help"
+            << color::reset
+            << "Show this text\n";
+
+            std::cout << color::yellow;
+            std::cout.width(printalin);
+            std::cout << std::left
+            << "--version"
             << color::reset
             << "Show version of program\n";
 
@@ -600,6 +751,7 @@ int main(int argc, char* argv[])
             ;
 
             return 0;
+            }
             break;
 
         case 'p':
@@ -618,15 +770,43 @@ int main(int argc, char* argv[])
                 return 0;
             }
             break;
+        
+        case 'b': //bookmark-sort
+            if (index+1 < argc && sortoption.find(argv[index+1])!=sortoption.end())
+            {
+                bookmark_sortcriteria = sortoption.at(argv[index+1]);
+                b_filter = argv[index+1];
+                ++index;
+            }
+            else
+            {
+                std::cout << "Error occured while parsing arguments: "
+                << color::red << "no or invalid argument for bookmark sort filter\n" << color::reset;
+                return 0;
+            }
+            break;
+        
+        case 'c': //folder / collection-sort
+            if (index+1 < argc && sortoption.find(argv[index+1])!=sortoption.end())
+            {
+                folder_sortcriteria = sortoption.at(argv[index+1]);
+                f_filter = argv[index+1];
+                ++index;
+            }
+            else
+            {
+                std::cout << "Error occured while parsing arguments: "
+                << color::red << "no or invalid argument for folder(collection) sort filter\n" << color::reset;
+                return 0;
+            }
+            break;
 
+
+        case '2':
+            download_favicon = true;
         case 'f':
             download_favicon = true;
             break;
-
-        case 'b':
-            download_favicon = true;
-            download_boost = true;
-        break;
 
         case 'i':
             if (index+1 < argc && argmap.find(argv[index+1])==argmap.end())
@@ -679,6 +859,13 @@ int main(int argc, char* argv[])
     switch (res)
     {
     case /* constant-expression  */0:
+
+        if (bookmark_sortcriteria != sortcriteria::def)
+        std::cout << "Bookmark sorted by : " << color::brightyellow << b_filter << color::reset << '\n';
+
+        if (folder_sortcriteria != sortcriteria::def)
+        std::cout << "Folder sorted by : " << color::brightyellow << f_filter << color::reset << '\n';
+
         std::cout
         << "Export completed\nfrom "
         << color::brightyellow
@@ -695,14 +882,21 @@ int main(int argc, char* argv[])
         << "\n";
         break;
 
+    case 3:
+        std::cout << "Error occured at opening database file. Is this path valid?: "
+        << expand_path(INPUT_PATH) << '\n';
+        break;
+
     case 1:
-        std::cout << "Error occured at database file.\n";
+        std::cout << "Error occured at reading database file. Is this path valid?: "
+        << expand_path(INPUT_PATH) << '\n';
         break;
 
     case 2:
         std::cout << "Error occured making output file. Is this path valid or accessible with current permission?: "
         << OUTPUT_PATH
         << "\n";
+        break;
 
     default:
         break;
