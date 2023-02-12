@@ -12,11 +12,12 @@ Using ColKeeper, you can easily export Edge collections and import them as bookm
 4. Go to setting page of your browser(Edge, Chrome or Firefox) and import bookmark. Just opening the exported HTML file by double-click won't import bookmarks. You need to go to settings.
 
 # Supported
+- Windows
 - Enviroment variables when setting path manually with ```-i```, ```-o```
 - Multi-profile (```-p "Profile Folder Name"```)
 - Favicons (With ```-f``` or ```-b``` - b is a little faster)
+- Sort bookmark and folder by filter
 
-# Not supported (but will be)
+# Not yet supported
 - linux
-- sort bookmark and folder by some criteria
 - export non-website elements
